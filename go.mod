@@ -2,7 +2,10 @@ module github.com/wxnacy/go-tasker
 
 go 1.20
 
-require github.com/cheggaaa/pb/v3 v3.1.2
+require (
+	github.com/cheggaaa/pb/v3 v3.1.2
+	github.com/mitchellh/go-homedir v1.1.0
+)
 
 require (
 	github.com/VividCortex/ewma v1.2.0 // indirect
