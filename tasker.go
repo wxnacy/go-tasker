@@ -2,7 +2,6 @@
 package tasker
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/cheggaaa/pb/v3"
@@ -47,17 +46,19 @@ func NewTasker() *Tasker {
 		Config:      config,
 		processChan: make(chan bool, config.ProcessNum),
 		resultChan:  make(chan *Task),
-		Tasks:       make([]*Task, 0),
+		tasks:       make([]*Task, 0),
 	}
 }
 
 type Tasker struct {
-	TaskId      string
-	Config      *TaskerConfig
-	Tasks       []*Task
+	TaskId string
+	Config *TaskerConfig
+
+	tasks       []*Task
 	processChan chan bool
 	resultChan  chan *Task
-	WaitGroup   sync.WaitGroup
+	waitGroup   sync.WaitGroup
+	pbar        *pb.ProgressBar
 }
 
 func (t *Tasker) BuildTasks() error { return nil }
@@ -71,17 +72,27 @@ func (t *Tasker) BeforeRun() error { return nil }
 func (t *Tasker) RunTask(task *Task) error { return nil }
 
 func (t *Tasker) AddTask(task *Task) {
-	t.Tasks = append(t.Tasks, task)
+	t.tasks = append(t.tasks, task)
 }
 
 func (t *Tasker) GetTasks() []*Task {
-	return t.Tasks
+	return t.tasks
+}
+
+func (t *Tasker) GetErrorTasks() []*Task {
+	tasks := make([]*Task, 0)
+	for _, t := range t.GetTasks() {
+		if t.Err != nil {
+			tasks = append(tasks, t)
+		}
+	}
+	return tasks
 }
 
 func (t *Tasker) asyncRunTask(runTaskFunc TaskFunc, task *Task) {
-	t.WaitGroup.Add(1)
+	t.waitGroup.Add(1)
 	go func(task *Task) {
-		defer t.WaitGroup.Done()
+		defer t.waitGroup.Done()
 		t.processChan <- true
 		err := runTaskFunc(task)
 		// fmt.Println(err)
@@ -91,23 +102,42 @@ func (t *Tasker) asyncRunTask(runTaskFunc TaskFunc, task *Task) {
 	}(task)
 }
 
+// 开始加载进度条
+func (t *Tasker) pbStart() error {
+	if t.Config.UseProgressBar {
+		t.pbar = pb.Full.Start(len(t.GetTasks()))
+	}
+	return nil
+}
+
+// 增加进度
+func (t *Tasker) pbIncr() {
+	if t.Config.UseProgressBar {
+		t.pbar.Increment()
+	}
+}
+
+// 结束进度
+func (t *Tasker) pbFinish() {
+	if t.Config.UseProgressBar {
+		t.pbar.Finish()
+	}
+}
+
 func (t *Tasker) Run(runTaskFunc TaskFunc) error {
 
-	for _, task := range t.Tasks {
+	for _, task := range t.GetTasks() {
 		t.asyncRunTask(runTaskFunc, task)
 	}
 
 	go func() {
-		t.WaitGroup.Wait()
+		t.waitGroup.Wait()
 		close(t.resultChan)
 		close(t.processChan)
 	}()
 
 	RetryTime := 0
-	var bar *pb.ProgressBar
-	if t.Config.UseProgressBar {
-		bar = pb.Full.Start(len(t.Tasks))
-	}
+	t.pbStart()
 	// 获取结果
 	for res := range t.resultChan {
 		// 判断是否需要重试
@@ -117,58 +147,25 @@ func (t *Tasker) Run(runTaskFunc TaskFunc) error {
 			RetryTime++
 			t.asyncRunTask(runTaskFunc, res)
 		} else {
-			if t.Config.UseProgressBar {
-				bar.Increment()
-			}
+			t.pbIncr()
 		}
 	}
-	if t.Config.UseProgressBar {
-		bar.Finish()
-	}
+	t.pbFinish()
 	return nil
 }
 
 func (t *Tasker) SyncRun(runTaskFunc TaskFunc) error {
 
-	var bar *pb.ProgressBar
-	if t.Config.UseProgressBar {
-		bar = pb.Full.Start(len(t.Tasks))
-	}
-	for _, task := range t.Tasks {
+	t.pbStart()
+	for _, task := range t.GetTasks() {
 		err := runTaskFunc(task)
-		fmt.Println(err)
-		if t.Config.UseProgressBar {
-			bar.Increment()
+		if err != nil {
+			task.Err = err
+		} else {
+			t.pbIncr()
 		}
 	}
 
-	if t.Config.UseProgressBar {
-		bar.Finish()
-	}
+	t.pbFinish()
 	return nil
-}
-
-func (t *Tasker) Exec(isSync bool) error {
-	var err error
-	err = t.Build()
-	if err != nil {
-		return err
-	}
-	err = t.BuildTasks()
-	if err != nil {
-		return err
-	}
-	err = t.BeforeRun()
-	if err != nil {
-		return err
-	}
-	if isSync {
-		err = t.SyncRun(t.RunTask)
-	} else {
-		err = t.Run(t.RunTask)
-	}
-	if err != nil {
-		return err
-	}
-	return t.AfterRun()
 }
