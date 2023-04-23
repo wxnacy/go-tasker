@@ -14,10 +14,37 @@ type ITasker interface {
 	BuildTasks() error
 	AddTask(*Task)
 	GetTasks() []*Task
+	RunTask(*Task) error
 	Run(TaskFunc) error
 	SyncRun(TaskFunc) error
 	AfterRun() error
 	BeforeRun() error
+}
+
+// 执行任务
+func ExecTasker(t ITasker, isSync bool) error {
+	var err error
+	err = t.Build()
+	if err != nil {
+		return err
+	}
+	err = t.BuildTasks()
+	if err != nil {
+		return err
+	}
+	err = t.BeforeRun()
+	if err != nil {
+		return err
+	}
+	if isSync {
+		err = t.SyncRun(t.RunTask)
+	} else {
+		err = t.Run(t.RunTask)
+	}
+	if err != nil {
+		return err
+	}
+	return t.AfterRun()
 }
 
 type Task struct {
