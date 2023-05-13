@@ -19,18 +19,22 @@ type ITasker interface {
 	SyncRun(TaskFunc) error
 	AfterRun() error
 	BeforeRun() error
+	Progress() float64
 }
 
 // 执行任务
 func ExecTasker(t ITasker, isSync bool) error {
+	// TODO: afterrun 执行顺序
 	var err error
-	err = t.Build()
-	if err != nil {
-		return err
-	}
-	err = t.BuildTasks()
-	if err != nil {
-		return err
+	if len(t.GetTasks()) == 0 {
+		err = t.Build()
+		if err != nil {
+			return err
+		}
+		err = t.BuildTasks()
+		if err != nil {
+			return err
+		}
 	}
 	err = t.BeforeRun()
 	if err != nil {
@@ -47,10 +51,40 @@ func ExecTasker(t ITasker, isSync bool) error {
 	return t.AfterRun()
 }
 
+// 获取任务进度
+// 建议 NewTask 方法精确的传入 done 参数
+func GetTaskerProgress(t ITasker) (p float64, err error) {
+	if len(t.GetTasks()) == 0 {
+		err = t.Build()
+		if err != nil {
+			return
+		}
+		err = t.BuildTasks()
+		if err != nil {
+			return
+		}
+	}
+	p = t.Progress()
+	return
+}
+
+// 新建任务体
+// info: 具体的任务
+// done: 该任务是否已经完成，正确的传入此值可以提升效率
+func NewTask(info interface{}, done bool) *Task {
+	return &Task{Info: info, IsDone: done}
+}
+
 type Task struct {
 	RetryTime int         `json:"retry_count"`
 	Err       error       `json:"err"`
+	IsDone    bool        `json:"done"`
 	Info      interface{} `json:"info"`
+}
+
+func (t *Task) Done() *Task {
+	t.IsDone = true
+	return t
 }
 
 type TaskerConfig struct {
@@ -121,9 +155,14 @@ func (t *Tasker) asyncRunTask(runTaskFunc TaskFunc, task *Task) {
 	go func(task *Task) {
 		defer t.waitGroup.Done()
 		t.processChan <- true
-		err := runTaskFunc(task)
-		// fmt.Println(err)
-		task.Err = err
+		if !task.IsDone {
+			err := runTaskFunc(task)
+			if err != nil {
+				task.Err = err
+			} else {
+				task.Done()
+			}
+		}
 		<-t.processChan
 		t.resultChan <- task
 	}(task)
@@ -182,7 +221,6 @@ func (t *Tasker) Run(runTaskFunc TaskFunc) error {
 }
 
 func (t *Tasker) SyncRun(runTaskFunc TaskFunc) error {
-
 	t.pbStart()
 	for _, task := range t.GetTasks() {
 		err := runTaskFunc(task)
@@ -192,7 +230,18 @@ func (t *Tasker) SyncRun(runTaskFunc TaskFunc) error {
 			t.pbIncr()
 		}
 	}
-
 	t.pbFinish()
 	return nil
+}
+
+// 获取进度
+func (t *Tasker) Progress() float64 {
+	var done float64
+	for _, t := range t.GetTasks() {
+		if t.IsDone {
+			done++
+		}
+	}
+	p := done / float64(len(t.GetTasks()))
+	return p
 }
