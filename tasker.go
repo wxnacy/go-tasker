@@ -22,6 +22,14 @@ type ITasker interface {
 	Progress() float64
 }
 
+func SimpleExecTasks(tasks []*Task, runFunc TaskFunc) error {
+	tasker := NewTasker()
+	for _, task := range tasks {
+		tasker.AddTask(task)
+	}
+	return tasker.Run(runFunc)
+}
+
 // 执行任务
 func ExecTasker(t ITasker, isSync bool) error {
 	// TODO: afterrun 执行顺序
